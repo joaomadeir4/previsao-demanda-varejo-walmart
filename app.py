@@ -27,13 +27,24 @@ PLOT_LAYOUT = dict(
 )
 GRID = dict(gridcolor='#1f2d45', zerolinecolor='#1f2d45')
 
-@st.cache_data
-def load_data():
-    base = os.path.dirname(os.path.abspath(__file__))
-    path = os.path.join(base, "data", "silver", "sales_slim.parquet")
-    return pd.read_parquet(path, engine="pyarrow")
+BASE = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(BASE, "data", "silver")
 
-df = load_data()
+
+@st.cache_data
+def load_aggs():
+    agg_daily = pd.read_parquet(os.path.join(DATA_DIR, "agg_daily.parquet"), engine="pyarrow")
+    agg_daily["date"] = pd.to_datetime(agg_daily["date"])
+    agg_daily_store = pd.read_parquet(os.path.join(DATA_DIR, "agg_daily_store.parquet"), engine="pyarrow")
+    agg_daily_store["date"] = pd.to_datetime(agg_daily_store["date"])
+    agg_daily_cat = pd.read_parquet(os.path.join(DATA_DIR, "agg_daily_cat.parquet"), engine="pyarrow")
+    agg_daily_cat["date"] = pd.to_datetime(agg_daily_cat["date"])
+    agg_store_dept = pd.read_parquet(os.path.join(DATA_DIR, "agg_store_dept.parquet"), engine="pyarrow")
+    agg_store_item = pd.read_parquet(os.path.join(DATA_DIR, "agg_store_item.parquet"), engine="pyarrow")
+    return agg_daily, agg_daily_store, agg_daily_cat, agg_store_dept, agg_store_item
+
+
+agg_daily, agg_daily_store, agg_daily_cat, agg_store_dept, agg_store_item = load_aggs()
 
 st.markdown("## Retail Predictive Forecasting — Walmart M5")
 st.markdown('<div class="section-context">Análise de demanda do dado bruto até o sinal que o modelo de previsão precisa captar. Cada bloco parte de uma pergunta de negócio antes de entrar no gráfico.</div>', unsafe_allow_html=True)
@@ -44,7 +55,7 @@ st.markdown('<div class="chapter">CAPÍTULO 1 · VISÃO MACRO</div>', unsafe_all
 st.markdown('<div class="section-q">Qual é o tamanho e o ritmo dessa operação?</div>', unsafe_allow_html=True)
 st.markdown('<div class="section-context">Antes de treinar qualquer modelo, precisa entender a base histórica: a inércia da demanda, onde estão os picos fora da curva e a tendência de longo prazo que o algoritmo vai ter que aprender.</div>', unsafe_allow_html=True)
 
-trend_global = df.groupby('date')['revenue'].sum().reset_index()
+trend_global = agg_daily[['date', 'revenue']].copy()
 trend_global['media_movel_30d'] = trend_global['revenue'].rolling(30, center=True).mean()
 receita_total = trend_global['revenue'].sum()
 receita_media = trend_global['revenue'].mean()
@@ -105,9 +116,9 @@ st.markdown('<div class="chapter">CAPÍTULO 3 · CHOQUES EXTERNOS</div>', unsafe
 st.markdown('<div class="section-q">Quais eventos injetam ou drenam receita fora do padrão?</div>', unsafe_allow_html=True)
 st.markdown('<div class="section-context">Feriados e eventos especiais não são ruído, são sinal. O modelo precisa saber diferenciar um Super Bowl de uma segunda-feira qualquer.</div>', unsafe_allow_html=True)
 
-if 'event_name_1' in df.columns:
-    trend_g = trend_global[['date', 'revenue']]
-    events = df[df['event_name_1'].notna()][['date','event_name_1']].drop_duplicates()
+if 'event_name_1' in agg_daily.columns:
+    trend_g = agg_daily[['date', 'revenue']]
+    events = agg_daily[agg_daily['event_name_1'].notna()][['date', 'event_name_1']].drop_duplicates()
     events = events[events['event_name_1'] != 'nan']
     holiday = trend_g.merge(events, on='date', how='inner')
     media_normal = trend_g[~trend_g['date'].isin(events['date'])]['revenue'].mean()
@@ -135,7 +146,9 @@ st.markdown('<div class="chapter">CAPÍTULO 4 · LOJAS E ESTADOS</div>', unsafe_
 st.markdown('<div class="section-q">A localização importa ou todas as lojas são parecidas?</div>', unsafe_allow_html=True)
 st.markdown('<div class="section-context">Se a disparidade entre lojas for alta, o modelo vai precisar de variável categórica de localização. Se for baixa, um modelo global já resolve.</div>', unsafe_allow_html=True)
 
-store_perf = df.groupby(['store_id','state_id'], observed=True).agg(dias=('date','nunique'), faturamento=('revenue','sum')).reset_index()
+store_perf = agg_daily_store.groupby(['store_id', 'state_id'], observed=True).agg(
+    dias=('date', 'nunique'), faturamento=('revenue', 'sum')
+).reset_index()
 store_perf['media_diaria'] = store_perf['faturamento'] / store_perf['dias']
 media_global = store_perf['media_diaria'].mean()
 store_perf = store_perf.sort_values('media_diaria', ascending=True)
@@ -167,8 +180,8 @@ st.markdown('<div class="chapter">CAPÍTULO 5 · CATEGORIAS</div>', unsafe_allow
 st.markdown('<div class="section-q">Quais categorias sustentam o faturamento e qual é a mais estável?</div>', unsafe_allow_html=True)
 st.markdown('<div class="section-context">Entender a composição da receita por categoria ajuda a decidir onde o modelo precisa ser mais preciso. Categoria com sazonalidade forte pede features temporais mais ricas.</div>', unsafe_allow_html=True)
 
-cat_trend = df.groupby(['date','cat_id'], observed=True)['revenue'].sum().reset_index()
-cat_total = df.groupby('cat_id', observed=True)['revenue'].sum().reset_index()
+cat_trend = agg_daily_cat
+cat_total = agg_daily_cat.groupby('cat_id', observed=True)['revenue'].sum().reset_index()
 cat_total['share'] = cat_total['revenue'] / cat_total['revenue'].sum() * 100
 cat_dom = cat_total.loc[cat_total['revenue'].idxmax(), 'cat_id']
 cat_dom_share = cat_total.loc[cat_total['revenue'].idxmax(), 'share']
@@ -191,11 +204,10 @@ st.markdown('<div class="section-context">Os blocos seguintes descem ao nível d
 
 col1, col2 = st.columns(2)
 with col1:
-    estado = st.selectbox("Estado", sorted(df['state_id'].unique()))
+    estado = st.selectbox("Estado", sorted(agg_daily_store['state_id'].unique()))
 with col2:
-    loja = st.selectbox("Loja", sorted(df[df['state_id'] == estado]['store_id'].unique()))
+    loja = st.selectbox("Loja", sorted(agg_daily_store[agg_daily_store['state_id'] == estado]['store_id'].unique()))
 
-df_loja = df[df['store_id'] == loja].copy()
 st.divider()
 
 # 6. DEPARTAMENTOS
@@ -203,7 +215,7 @@ st.markdown('<div class="chapter">CAPÍTULO 6 · DEPARTAMENTOS</div>', unsafe_al
 st.markdown(f'<div class="section-q">Dentro de {loja}, qual departamento concentra o risco do modelo?</div>', unsafe_allow_html=True)
 st.markdown('<div class="section-context">Já sabemos que FOODS domina no geral. Aqui a ideia é achar qual subdepartamento concentra o maior volume financeiro — e, por consequência, o maior risco de erro de previsão.</div>', unsafe_allow_html=True)
 
-dept = df_loja.groupby('dept_id', observed=True)['revenue'].sum().reset_index()
+dept = agg_store_dept[agg_store_dept['store_id'] == loja][['dept_id', 'revenue']].copy()
 dept['share'] = dept['revenue'] / dept['revenue'].sum() * 100
 dept = dept.sort_values('revenue', ascending=True)
 dept_top = dept.iloc[-1]
@@ -226,7 +238,8 @@ st.markdown('<div class="chapter">CAPÍTULO 7 · CURVA ABC (PARETO)</div>', unsa
 st.markdown(f'<div class="section-q">Quais SKUs sustentam 80% do faturamento de {loja}?</div>', unsafe_allow_html=True)
 st.markdown('<div class="section-context">No nível mais baixo de granularidade, dá pra separar sinal de ruído. Os produtos Classe A precisam de previsão precisa, os demais toleram mais erro.</div>', unsafe_allow_html=True)
 
-pareto = df_loja.groupby('item_id', observed=True)['revenue'].sum().sort_values(ascending=False).reset_index()
+item_loja = agg_store_item[agg_store_item['store_id'] == loja]
+pareto = item_loja[['item_id', 'revenue']].sort_values('revenue', ascending=False).reset_index(drop=True)
 pareto['cumsum'] = pareto['revenue'].cumsum()
 pareto['cumperc'] = pareto['cumsum'] / pareto['revenue'].sum() * 100
 pareto['rank'] = range(1, len(pareto) + 1)
@@ -261,8 +274,7 @@ st.markdown('<div class="chapter">CAPÍTULO 8 · INTERMITÊNCIA DE VENDAS</div>'
 st.markdown(f'<div class="section-q">Quanto do silêncio nas prateleiras é padrão e não falha do modelo?</div>', unsafe_allow_html=True)
 st.markdown('<div class="section-context">Muitos produtos não vendem todo dia. Se o modelo não souber lidar com esse silêncio, vai interpretar zero como ausência de demanda quando na verdade é comportamento normal do SKU.</div>', unsafe_allow_html=True)
 
-sparsity = df_loja.groupby('item_id', observed=True)['sales'].apply(lambda x: (x == 0).mean() * 100).reset_index()
-sparsity.columns = ['item_id', 'zero_pct']
+sparsity = item_loja[['item_id', 'zero_pct']].copy()
 media_zeros = sparsity['zero_pct'].mean()
 pct_mais50 = (sparsity['zero_pct'] > 50).mean() * 100
 
