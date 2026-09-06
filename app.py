@@ -1,4 +1,3 @@
-import io
 import os
 import streamlit as st
 import pandas as pd
@@ -32,13 +31,7 @@ GRID = dict(gridcolor='#1f2d45', zerolinecolor='#1f2d45')
 def load_data():
     base = os.path.dirname(os.path.abspath(__file__))
     path = os.path.join(base, "data", "silver", "sales_slim.parquet")
-    with open(path, "rb") as f:
-        buffer = io.BytesIO(f.read())
-    df = pd.read_parquet(buffer, engine="fastparquet")
-    df["date"] = pd.to_datetime(df["date"])
-    for col in ["store_id", "state_id", "cat_id", "dept_id", "item_id", "event_name_1"]:
-        df[col] = df[col].astype("category")
-    return df
+    return pd.read_parquet(path, engine="pyarrow")
 
 df = load_data()
 
@@ -80,7 +73,7 @@ st.markdown('<div class="section-context">Sem variáveis de calendário, o algor
 traducao = {'Monday':'Segunda','Tuesday':'Terça','Wednesday':'Quarta',
             'Thursday':'Quinta','Friday':'Sexta','Saturday':'Sábado','Sunday':'Domingo'}
 ordem_pt = ['Segunda','Terça','Quarta','Quinta','Sexta','Sábado','Domingo']
-trend_dia = df.groupby('date')['revenue'].sum().reset_index()
+trend_dia = trend_global[['date', 'revenue']].copy()
 trend_dia['dia'] = trend_dia['date'].dt.day_name().map(traducao)
 media_dia = trend_dia.groupby('dia')['revenue'].mean().reindex(ordem_pt).reset_index()
 media_global_dia = media_dia['revenue'].mean()
@@ -113,7 +106,7 @@ st.markdown('<div class="section-q">Quais eventos injetam ou drenam receita fora
 st.markdown('<div class="section-context">Feriados e eventos especiais não são ruído, são sinal. O modelo precisa saber diferenciar um Super Bowl de uma segunda-feira qualquer.</div>', unsafe_allow_html=True)
 
 if 'event_name_1' in df.columns:
-    trend_g = df.groupby('date')['revenue'].sum().reset_index()
+    trend_g = trend_global[['date', 'revenue']]
     events = df[df['event_name_1'].notna()][['date','event_name_1']].drop_duplicates()
     events = events[events['event_name_1'] != 'nan']
     holiday = trend_g.merge(events, on='date', how='inner')
